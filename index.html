@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App Multimédia Pro</title>
+    <style>
+        body { background-color: #2b2b2b; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; overflow-x: hidden; }
+        #container { display: flex; flex-direction: column; gap: 15px; width: 100%; align-items: center; padding-bottom: 100px; }
+        .row { display: flex; gap: 15px; }
+        .btn {
+            width: 80px; height: 80px; background: #444; border: 2px solid #666;
+            color: white; border-radius: 10px; cursor: pointer; display: flex; 
+            align-items: center; justify-content: center; text-align: center; 
+            font-size: 0.7em; background-size: cover; background-position: center;
+        }
+        .son-rempli { color: #39FF14 !important; font-weight: bold; border-color: #39FF14 !important; }
+        .action-btns { display: flex; flex-direction: column; gap: 10px; align-items: center; margin-top: 30px; }
+        #playBtn, #ambianceBtn { padding: 12px 40px; border: none; border-radius: 5px; color: white; font-weight: bold; cursor: pointer; width: 200px; }
+        #playBtn { background: #28a745; }
+        #ambianceBtn { background: #6f42c1; }
+        
+        .fullscreen-mode { background-color: black !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; }
+        .fullscreen-mode #container, .fullscreen-mode .action-btns { display: none !important; }
+        
+        #bgDisplay { 
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: black; 
+            background-size: cover; 
+            background-repeat: no-repeat; background-position: center; 
+            display: none; z-index: 999; opacity: 0; transition: opacity 1s ease-in-out;
+        }
+        
+        #textDisplay { 
+            position: absolute; bottom: 12%; width: 80%; left: 10%;
+            text-align: left; font-family: 'Courier New', Courier, monospace;
+            font-size: clamp(10px, 3vw, 14px); color: #fff; font-weight: bold;
+            text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+            white-space: pre-wrap;
+        }
+        .letter { display: inline-block; min-width: 0.5em; }
+        
+        #modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #333; padding: 20px; border-radius: 10px; z-index: 20000; }
+        #modal textarea { width: 250px; height: 100px; margin-bottom: 10px; }
+        footer { position: fixed; bottom: 10px; display: flex; flex-direction: column; align-items: center; gap: 5px; z-index: 10000; }
+    </style>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#4b6cb7">
+<link rel="apple-touch-icon" href="icon.png"></head>
+<body>
+
+    <div id="bgDisplay"><div id="textDisplay"></div></div>
+    <div id="container"></div>
+    
+    <div id="modal">
+        <textarea id="txtInput"></textarea><br>
+        <button onclick="collerTexte()">Coller</button>
+        <button onclick="validerTexte()">Valider</button>
+    </div>
+    
+    <div class="action-btns">
+        <button id="playBtn" onclick="lancerSequence()">PLAY</button>
+        <button id="ambianceBtn" onclick="document.getElementById('ambianceInput').click()">Ambiance (Son)</button>
+        <input type="file" id="ambianceInput" accept="audio/*" style="display:none" onchange="handleAmbiance(this)">
+    </div>
+
+    <footer>
+        <img src="https://i.ibb.co/VWpZCsDr/dfg-1.png" alt="dfg-1" style="width: 60px; cursor: pointer;" onclick="togglePlayPause()" oncontextmenu="exitApp(event)">
+    </footer>
+
+    <script>
+        let sequences = [];
+        let ambianceAudio = null;
+        let currentAudio = null;
+        let activeId = null;
+        let typingTimeout = null;
+        let sequenceTimeout = null;
+
+        function togglePlayPause() {
+            if (!currentAudio) return;
+            currentAudio.paused ? currentAudio.play() : currentAudio.pause();
+        }
+
+        function exitApp(e) {
+            if(e) e.preventDefault();
+            document.body.classList.remove('fullscreen-mode');
+            if (document.fullscreenElement) document.exitFullscreen();
+            document.getElementById('bgDisplay').style.display = 'none';
+            
+            // Arrête tous les sons et réinitialise les pistes
+            if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; }
+            if (ambianceAudio) { ambianceAudio.pause(); ambianceAudio.currentTime = 0; }
+            
+            // Interrompt les transitions et l'écriture en cours
+            clearTimeout(typingTimeout);
+            clearTimeout(sequenceTimeout);
+        }
+
+        async function typewriter(text) {
+            // Attendre 1 seconde avant de commencer l'écriture
+            await new Promise(r => typingTimeout = setTimeout(r, 1000));
+            
+            const el = document.getElementById('textDisplay');
+            el.innerHTML = "";
+            for (let i = 0; i < text.length; i++) {
+                const char = text.charAt(i);
+                if (char === '\n') {
+                    el.appendChild(document.createElement('br'));
+                } else {
+                    const span = document.createElement('span');
+                    span.className = 'letter';
+                    span.innerText = char;
+                    el.appendChild(span);
+                }
+                await new Promise(r => typingTimeout = setTimeout(r, 80));
+            }
+        }
+
+        function ouvrirModal(id) { activeId = id; document.getElementById('txtInput').value = sequences[id].text || ""; document.getElementById('modal').style.display = 'block'; }
+        async function collerTexte() { const text = await navigator.clipboard.readText(); document.getElementById('txtInput').value = text; }
+        function validerTexte() { sequences[activeId].text = document.getElementById('txtInput').value; document.getElementById('modal').style.display = 'none'; }
+
+        function cycleMode(id) {
+            let btn = document.getElementById(`btnM${id}`);
+            let modes = ["Son", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
+            let next = (modes.indexOf(btn.innerText) + 1) % modes.length;
+            btn.innerText = modes[next];
+            sequences[id].mode = modes[next];
+        }
+
+        function createRow(imgUrl = null) {
+            const id = sequences.length;
+            sequences.push({img: imgUrl, audio: null, mode: "Son", text: ""});
+            const row = document.createElement('div');
+            row.className = 'row';
+            row.innerHTML = `
+                <button class="btn" id="btnM${id}" onclick="cycleMode(${id})">Son</button>
+                <button class="btn" onclick="ouvrirModal(${id})">TXT</button>
+                <button class="btn" id="btnI${id}" onclick="document.getElementById('i${id}').click()" style="${imgUrl ? 'background-image: url(' + imgUrl + ')' : ''}"></button>
+                <button class="btn" id="btnA${id}" onclick="document.getElementById('a${id}').click()">🔊</button>
+                <input type="file" id="i${id}" accept="image/*" multiple style="display:none" onchange="handleFile(this, ${id}, 'img')">
+                <input type="file" id="a${id}" accept="audio/*" style="display:none" onchange="handleFile(this, ${id}, 'audio')">
+            `;
+            document.getElementById('container').appendChild(row);
+        }
+
+        function handleFile(input, id, type) {
+            if (!input.files || input.files.length === 0) return;
+            if (input.files.length > 1) {
+                if (sequences.length === 1 && !sequences[0].img) { sequences.pop(); document.getElementById('container').innerHTML = ''; }
+                for (let i = 0; i < input.files.length; i++) createRow(URL.createObjectURL(input.files[i]));
+                return;
+            }
+            const url = URL.createObjectURL(input.files[0]);
+            if (type === 'img') { sequences[id].img = url; document.getElementById(`btnI${id}`).style.backgroundImage = `url(${url})`; }
+            else { sequences[id].audio = new Audio(url); document.getElementById(`btnA${id}`).classList.add('son-rempli'); document.getElementById(`btnA${id}`).innerText = "🔊"; }
+        }
+
+        function handleAmbiance(input) {
+            if (!input.files[0]) return;
+            ambianceAudio = new Audio(URL.createObjectURL(input.files[0]));
+            ambianceAudio.loop = true;
+            document.getElementById('ambianceBtn').classList.add('son-rempli');
+            document.getElementById('ambianceBtn').innerText = "Ambiance OK";
+        }
+
+        async function lancerSequence() {
+            const validSeqs = sequences.filter(s => s.img !== null);
+            if (validSeqs.length === 0) return;
+            
+            document.getElementById('bgDisplay').style.display = 'block';
+            document.documentElement.requestFullscreen();
+            document.body.classList.add('fullscreen-mode');
+
+            await new Promise(r => sequenceTimeout = setTimeout(r, 5000));
+
+            if (ambianceAudio) { ambianceAudio.currentTime = 0; ambianceAudio.volume = 0.25; ambianceAudio.play(); }
+
+            for (let seq of validSeqs) {
+                clearTimeout(typingTimeout);
+                document.getElementById('textDisplay').innerHTML = "";
+                document.getElementById('bgDisplay').style.backgroundImage = `url(${seq.img})`;
+                document.getElementById('bgDisplay').style.opacity = 1;
+                
+                if(seq.text) await typewriter(seq.text);
+                
+                if (seq.mode === "Son" && seq.audio) {
+                    currentAudio = seq.audio;
+                    await new Promise(r => { seq.audio.onended = r; seq.audio.play(); });
+                } else {
+                    let delay = seq.mode === "Son" ? 3000 : parseInt(seq.mode) * 1000;
+                    await new Promise(r => sequenceTimeout = setTimeout(r, delay));
+                }
+                document.getElementById('bgDisplay').style.opacity = 0;
+                await new Promise(r => sequenceTimeout = setTimeout(r, 1000));
+            }
+            if (ambianceAudio) ambianceAudio.pause();
+            exitApp();
+        }
+        createRow();
+    </script>
+
+<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));}</script>
+</body>
+</html>
